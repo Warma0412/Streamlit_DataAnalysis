@@ -16,6 +16,9 @@ import io
 
 warnings.filterwarnings('ignore')
 
+# 设置Pandas Styler限制（备用方案）
+pd.set_option("styler.render.max_elements", 1000000)
+
 # ============== 页面配置 ==============
 st.set_page_config(
     page_title="数据分析平台",
@@ -47,6 +50,9 @@ st.markdown("""
     td { border-bottom: 1px solid #f1f5f9 !important; padding: 8px !important; }
     hr { border: none; height: 1px; background: #e2e8f0; margin: 1.5rem 0; }
     .algorithm-card { background: #fdf2f8; border: 1px solid #fbcfe8; border-radius: 8px; padding: 1rem; margin: 0.5rem 0; }
+    .compact-table { font-size: 0.85rem; }
+    .compact-table td { padding: 4px 8px !important; }
+    .dim-expander { border: 1px solid #e0f2fe; border-radius: 6px; margin-bottom: 0.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,7 +71,8 @@ def init_session_state():
     defaults = {
         'df': None, 'df_original': None, 'file_name': None,
         'date_columns': [], 'numeric_columns': [], 'categorical_columns': [],
-        'data_loaded': False, 'current_module': None
+        'data_loaded': False, 'current_module': '数据概览',
+        'base_start': None, 'base_end': None, 'target_start': None, 'target_end': None
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -112,57 +119,82 @@ def detect_column_types(df):
                 cat_cols.append(col)
     return df, date_cols, numeric_cols, cat_cols
 
-# ============== 时间选择器（时间段） ==============
+# ============== 时间选择器（修改默认值为最新一天 vs 前一天） ==============
 def render_time_range_selector(df, date_col):
     if date_col not in df.columns:
         return None, None, None, None
+    
     dates = pd.to_datetime(df[date_col].dropna()).sort_values().unique()
     if len(dates) < 2:
         st.warning("日期数据不足")
         return None, None, None, None
     
-    date_df = pd.DataFrame({'date': pd.to_datetime(dates)})
-    date_df['year'] = date_df['date'].dt.year
-    date_df['month'] = date_df['date'].dt.month
-    years = sorted(date_df['year'].unique(), reverse=True)
+    default_target_date = dates[-1]
+    default_base_date = dates[-2] if len(dates) >= 2 else dates[-1]
+    
+    quick_options = st.radio("快捷选择", ["自定义", "单日对比（昨 vs 今）", "最近7天 vs 前7天", "最近30天 vs 前30天"], horizontal=True)
+    
+    if quick_options == "单日对比（昨 vs 今）":
+        return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
+                default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+    
+    elif quick_options == "最近7天 vs 前7天":
+        if len(dates) >= 14:
+            base_end = dates[-8]
+            base_start = dates[-14]
+            target_start = dates[-7]
+            target_end = dates[-1]
+            return (base_start.strftime('%Y-%m-%d'), base_end.strftime('%Y-%m-%d'),
+                    target_start.strftime('%Y-%m-%d'), target_end.strftime('%Y-%m-%d'))
+        else:
+            st.warning("数据不足14天，使用单日对比")
+            return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+    
+    elif quick_options == "最近30天 vs 前30天":
+        if len(dates) >= 60:
+            base_end = dates[-31]
+            base_start = dates[-60]
+            target_start = dates[-30]
+            target_end = dates[-1]
+            return (base_start.strftime('%Y-%m-%d'), base_end.strftime('%Y-%m-%d'),
+                    target_start.strftime('%Y-%m-%d'), target_end.strftime('%Y-%m-%d'))
+        else:
+            st.warning("数据不足60天，使用单日对比")
+            return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
     
     st.markdown("**基期（对比期）**")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        base_year = st.selectbox("年", years, key="base_year")
+        base_year = st.selectbox("年", sorted(set(pd.to_datetime(dates).year), reverse=True), 
+                                index=0, key="base_year")
     with col2:
-        months = sorted(date_df[date_df['year'] == base_year]['month'].unique())
-        base_month = st.selectbox("月", months, key="base_month")
+        base_months = sorted(set([d.month for d in dates if d.year == base_year]), reverse=True)
+        base_month = st.selectbox("月", base_months, index=0, key="base_month")
     with col3:
-        month_dates = date_df[(date_df['year'] == base_year) & (date_df['month'] == base_month)]['date'].tolist()
-        base_start = st.selectbox("开始日", [d.strftime('%Y-%m-%d') for d in month_dates], index=0, key="base_start")
+        month_dates = [d for d in dates if d.year == base_year and d.month == base_month]
+        base_start = st.selectbox("开始日", [d.strftime('%Y-%m-%d') for d in month_dates], 
+                                 index=len(month_dates)-1 if month_dates else 0, key="base_start")
     with col4:
-        base_end = st.selectbox("结束日", [d.strftime('%Y-%m-%d') for d in month_dates], index=len(month_dates)-1, key="base_end")
+        base_end = st.selectbox("结束日", [d.strftime('%Y-%m-%d') for d in month_dates], 
+                               index=len(month_dates)-1 if month_dates else 0, key="base_end")
     
     st.markdown("**目标期（分析期）**")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        target_year = st.selectbox("年", years, key="target_year")
+        target_year = st.selectbox("年", sorted(set(pd.to_datetime(dates).year), reverse=True), 
+                                  index=0, key="target_year")
     with col2:
-        months_target = sorted(date_df[date_df['year'] == target_year]['month'].unique())
-        target_month = st.selectbox("月", months_target, key="target_month")
+        target_months = sorted(set([d.month for d in dates if d.year == target_year]), reverse=True)
+        target_month = st.selectbox("月", target_months, index=0, key="target_month")
     with col3:
-        month_dates_target = date_df[(date_df['year'] == target_year) & (date_df['month'] == target_month)]['date'].tolist()
-        target_start = st.selectbox("开始日", [d.strftime('%Y-%m-%d') for d in month_dates_target], index=0, key="target_start")
+        month_dates_target = [d for d in dates if d.year == target_year and d.month == target_month]
+        target_start = st.selectbox("开始日", [d.strftime('%Y-%m-%d') for d in month_dates_target], 
+                                   index=len(month_dates_target)-1 if month_dates_target else 0, key="target_start")
     with col4:
-        target_end = st.selectbox("结束日", [d.strftime('%Y-%m-%d') for d in month_dates_target], index=len(month_dates_target)-1, key="target_end")
-    
-    st.markdown("**快捷选择**")
-    col_q1, col_q2 = st.columns(2)
-    with col_q1:
-        if st.button("最近两期", use_container_width=True):
-            return dates[-2].strftime('%Y-%m-%d'), dates[-2].strftime('%Y-%m-%d'), dates[-1].strftime('%Y-%m-%d'), dates[-1].strftime('%Y-%m-%d')
-    with col_q2:
-        if st.button("最近7天 vs 前7天", use_container_width=True):
-            if len(dates) >= 14:
-                return dates[-14].strftime('%Y-%m-%d'), dates[-8].strftime('%Y-%m-%d'), dates[-7].strftime('%Y-%m-%d'), dates[-1].strftime('%Y-%m-%d')
-            else:
-                st.warning("数据不足14天")
+        target_end = st.selectbox("结束日", [d.strftime('%Y-%m-%d') for d in month_dates_target], 
+                                 index=len(month_dates_target)-1 if month_dates_target else 0, key="target_end")
     
     return base_start, base_end, target_start, target_end
 
@@ -170,7 +202,6 @@ def render_time_range_selector(df, date_col):
 class AttributionEngine:
     @staticmethod
     def calculate_contribution(df, dimension, metric, date_col, base_start, base_end, target_start, target_end):
-        """计算归因数据"""
         try:
             base_start_dt = pd.to_datetime(base_start)
             base_end_dt = pd.to_datetime(base_end)
@@ -197,23 +228,21 @@ class AttributionEngine:
                 target_val = target_data.get(dim, 0)
                 change = target_val - base_val
                 
-                # 变动率（该维度的变动率）
                 if base_val != 0:
                     change_rate = (change / base_val) * 100
                 else:
                     change_rate = 0
                 
-                # 贡献百分比（该维度变动占总变动的比重）
                 if total_change != 0:
                     contribution_pct = (change / total_change) * 100
                 else:
                     contribution_pct = 0
                 
-                # 贡献pp = 贡献百分比 × 总计变动率 / 100
                 contribution_pp = contribution_pct * total_change_rate / 100
                 
                 results.append({
-                    '维度': dim,
+                    '维度': dimension,
+                    '维度值': dim,
                     '基期值': base_val,
                     '目标期值': target_val,
                     '变动': change,
@@ -224,9 +253,9 @@ class AttributionEngine:
             
             result_df = pd.DataFrame(results).sort_values('变动', key=abs, ascending=False)
             
-            # 添加总计行
             total_row = pd.DataFrame([{
-                '维度': '总计',
+                '维度': dimension,
+                '维度值': '【总计】',
                 '基期值': total_base,
                 '目标期值': total_target,
                 '变动': total_change,
@@ -243,7 +272,6 @@ class AttributionEngine:
 
     @staticmethod
     def cross_analysis(df, dims, metric, date_col, base_start, base_end, target_start, target_end):
-        """交叉分析"""
         try:
             base_start_dt = pd.to_datetime(base_start)
             base_end_dt = pd.to_datetime(base_end)
@@ -254,49 +282,53 @@ class AttributionEngine:
             base_df = df[(df[date_col] >= base_start_dt) & (df[date_col] <= base_end_dt)]
             target_df = df[(df[date_col] >= target_start_dt) & (df[date_col] <= target_end_dt)]
             
-            pivot_base = base_df.groupby(dims)[metric].sum()
-            pivot_target = target_df.groupby(dims)[metric].sum()
+            base_data = base_df.groupby(dims)[metric].sum().reset_index()
+            target_data = target_df.groupby(dims)[metric].sum().reset_index()
             
-            combined = pd.concat([pivot_base, pivot_target], axis=1).fillna(0)
-            combined.columns = ['基期值', '目标期值']
-            combined['变动'] = combined['目标期值'] - combined['基期值']
+            merged = pd.merge(base_data, target_data, on=dims, how='outer', suffixes=('_基期', '_目标期')).fillna(0)
             
-            total_base = combined['基期值'].sum()
-            total_target = combined['目标期值'].sum()
-            total_change = combined['变动'].sum()
+            merged['变动'] = merged[f'{metric}_目标期'] - merged[f'{metric}_基期']
+            
+            total_base = merged[f'{metric}_基期'].sum()
+            total_target = merged[f'{metric}_目标期'].sum()
+            total_change = total_target - total_base
             total_change_rate = (total_change / total_base * 100) if total_base != 0 else 0
             
-            # 变动率
-            combined['变动率'] = np.where(combined['基期值'] != 0, (combined['变动'] / combined['基期值']) * 100, 0)
+            merged['变动率'] = np.where(merged[f'{metric}_基期'] != 0, 
+                                     (merged['变动'] / merged[f'{metric}_基期']) * 100, 0)
             
-            # 贡献百分比
-            combined['贡献百分比'] = np.where(total_change != 0, (combined['变动'] / total_change) * 100, 0)
+            merged['贡献百分比'] = np.where(total_change != 0, (merged['变动'] / total_change) * 100, 0)
             
-            # 贡献pp
-            combined['贡献pp'] = combined['贡献百分比'] * total_change_rate / 100
+            merged['贡献pp'] = merged['贡献百分比'] * total_change_rate / 100
             
-            combined = combined.sort_values('变动', key=abs, ascending=False)
+            merged = merged.rename(columns={
+                f'{metric}_基期': '基期值',
+                f'{metric}_目标期': '目标期值'
+            })
             
-            # 添加总计行
-            total_row = pd.DataFrame([{
+            result_cols = dims + ['基期值', '目标期值', '变动', '变动率', '贡献百分比', '贡献pp']
+            merged = merged[result_cols].sort_values('变动', key=abs, ascending=False)
+            
+            total_row_data = {dim: '【总计】' for dim in dims}
+            total_row_data.update({
                 '基期值': total_base,
                 '目标期值': total_target,
                 '变动': total_change,
                 '变动率': total_change_rate,
                 '贡献百分比': 100.0,
                 '贡献pp': total_change_rate
-            }], index=['总计'])
+            })
+            total_row = pd.DataFrame([total_row_data])
             
-            combined = pd.concat([total_row, combined])
+            merged = pd.concat([total_row, merged], ignore_index=True)
             
-            return combined.reset_index(), combined
+            return merged, total_change, total_base, total_target, total_change_rate
         except Exception as e:
             st.error(f"交叉分析失败: {str(e)}")
-            return None, None
+            return None, 0, 0, 0, 0
 
     @staticmethod
     def trend_analysis(df, dimension, metric, date_col):
-        """趋势分析"""
         try:
             trend_df = df.groupby([date_col, dimension])[metric].sum().reset_index()
             
@@ -320,7 +352,6 @@ class AttributionEngine:
                 xaxis=dict(gridcolor='#f1f5f9')
             )
             
-            # 增长率统计
             growth_data = []
             for dim_val in trend_df[dimension].unique():
                 values = trend_df[trend_df[dimension] == dim_val].sort_values(date_col)
@@ -341,7 +372,6 @@ class AttributionEngine:
             
             growth_df = pd.DataFrame(growth_data)
             
-            # 添加总计行
             total_first = trend_df.groupby(date_col)[metric].sum().iloc[0]
             total_last = trend_df.groupby(date_col)[metric].sum().iloc[-1]
             total_change = total_last - total_first
@@ -363,7 +393,6 @@ class AttributionEngine:
         except Exception as e:
             st.error(f"趋势分析失败: {str(e)}")
             return None, None
-
 
 # ============== 机器学习模块 ==============
 ML_ALGORITHMS = {
@@ -558,14 +587,22 @@ def render_upload():
         with col4:
             st.metric("数值列", len(st.session_state.numeric_columns))
 
-def render_module_selector():
+def render_module_buttons():
     if not st.session_state.data_loaded:
         return None
+    
     st.markdown('<div class="section-title">功能选择</div>', unsafe_allow_html=True)
     modules = ["数据概览", "异动归因", "交叉分析", "趋势分析", "可视化", "统计分析", "机器学习", "预测分析", "数据清洗"]
-    module = st.selectbox("选择功能", modules, label_visibility="collapsed")
-    st.session_state.current_module = module
-    return module
+    
+    cols = st.columns(3)
+    for idx, module in enumerate(modules):
+        with cols[idx % 3]:
+            btn_type = "primary" if st.session_state.current_module == module else "secondary"
+            if st.button(module, key=f"mod_{module}", use_container_width=True, type=btn_type):
+                st.session_state.current_module = module
+                st.rerun()
+    
+    return st.session_state.current_module
 
 def render_config(module):
     if not module:
@@ -582,6 +619,11 @@ def render_config(module):
     time_range = None
     extra = None
     
+    if dates:
+        default_date_idx = 0
+    else:
+        default_date_idx = None
+    
     if module in ["异动归因", "交叉分析"]:
         col1, col2 = st.columns(2)
         with col1:
@@ -590,7 +632,7 @@ def render_config(module):
             selected_metrics = st.multiselect("指标", metrics, default=metrics[:1] if metrics else [])
         if dates:
             st.markdown("**时间范围**")
-            date_col = st.selectbox("日期字段", dates, key="date_col")
+            date_col = st.selectbox("日期字段", dates, index=default_date_idx, key="date_col")
             if date_col:
                 time_range = render_time_range_selector(df, date_col)
     
@@ -601,12 +643,12 @@ def render_config(module):
         with col2:
             selected_metrics = st.multiselect("指标", metrics, default=metrics[:1] if metrics else [])
         if dates:
-            date_col = st.selectbox("日期字段", dates, key="trend_date")
+            date_col = st.selectbox("日期字段", dates, index=default_date_idx, key="trend_date")
     
     elif module == "数据概览":
         selected_metrics = st.multiselect("指标", metrics, default=metrics[:4] if metrics else [])
         if dates:
-            date_col = st.selectbox("日期字段（可选）", ['无'] + dates, key="overview_date")
+            date_col = st.selectbox("日期字段（可选）", ['无'] + dates, index=default_date_idx+1 if default_date_idx is not None else 0, key="overview_date")
             if date_col == '无':
                 date_col = None
     
@@ -629,8 +671,7 @@ def render_config(module):
         st.markdown("**算法选择**")
         ml_type = st.selectbox("算法", list(ML_ALGORITHMS.keys()))
         algo_info = ML_ALGORITHMS[ml_type]
-        with st.expander(f"关于 {algo_info['name']}"):
-            st.markdown(f"<div class='algorithm-card'>{algo_info['desc']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='algorithm-card'><b>{algo_info['name']}</b><br/>{algo_info['desc']}</div>", unsafe_allow_html=True)
         if ml_type == "聚类分析":
             selected_metrics = st.multiselect("特征", metrics, default=metrics[:2] if len(metrics) >= 2 else metrics)
         elif ml_type == "异常检测":
@@ -648,15 +689,34 @@ def render_config(module):
     
     elif module == "预测分析":
         if dates:
-            date_col = st.selectbox("日期字段", dates, key="forecast_date")
-            selected_metrics = st.selectbox("预测指标", metrics)
+            date_col = st.selectbox("日期字段", dates, index=default_date_idx, key="forecast_date")
+            selected_metric = st.selectbox("预测指标", metrics)
             periods = st.slider("预测天数", 7, 90, 30)
-            selected_metrics = {'metric': selected_metrics, 'periods': periods}
+            selected_metrics = {'metric': selected_metric, 'periods': periods}
         else:
             st.warning("需要日期字段")
     
     return selected_dims, selected_metrics, date_col, time_range, extra
 
+def style_contribution_df(df):
+    def color_pp(val):
+        if isinstance(val, (int, float)):
+            if val > 0:
+                return 'color: #dc2626'
+            elif val < 0:
+                return 'color: #16a34a'
+        return ''
+    
+    styled = df.style.format({
+        '基期值': smart_format,
+        '目标期值': smart_format,
+        '变动': smart_format,
+        '变动率': '{:.2f}%',
+        '贡献百分比': '{:.2f}%',
+        '贡献pp': '{:.2f}pp'
+    }).map(color_pp, subset=['贡献pp'])
+    
+    return styled
 
 def render_results(module, dims, metrics, date_col, time_range, extra):
     df = st.session_state.df
@@ -679,31 +739,9 @@ def render_results(module, dims, metrics, date_col, time_range, extra):
     elif module == "数据清洗":
         render_cleaning(df)
 
-def style_contribution_df(df):
-    """样式化归因表格"""
-    def color_val(val):
-        if isinstance(val, (int, float)):
-            if val > 0:
-                return 'color: #dc2626'
-            elif val < 0:
-                return 'color: #16a34a'
-        return ''
-    
-    styled = df.style.format({
-        '基期值': smart_format,
-        '目标期值': smart_format,
-        '变动': lambda x: f"{x:+,.0f}" if abs(x) >= 100 else f"{x:+.2f}",
-        '变动率': '{:+.1f}%',
-        '贡献百分比': '{:+.1f}%',
-        '贡献pp': lambda x: f"{x:+.2f}pp"
-    }).map(color_val, subset=['变动', '变动率', '贡献百分比', '贡献pp'])
-    
-    return styled
-
 def render_overview(df, metrics, date_col):
     st.markdown('<div class="section-title">数据概览</div>', unsafe_allow_html=True)
     
-    # 时间口径选择
     if date_col and date_col in df.columns:
         period = st.selectbox("时间口径", ["天", "周", "月", "年"], key="overview_period")
         
@@ -722,12 +760,11 @@ def render_overview(df, metrics, date_col):
             df['period'] = df[date_col].dt.to_period('Y').astype(str)
             ts_df = df.groupby('period')[metrics].sum().reset_index()
         
-        # 时间线图表
         st.markdown("**时间线**")
         x_col = date_col if period == "天" else 'period'
         
         fig = go.Figure()
-        for metric in metrics[:3]:  # 最多显示3个指标
+        for metric in metrics[:3]:
             fig.add_trace(go.Scatter(
                 x=ts_df[x_col], y=ts_df[metric],
                 mode='lines+markers', name=metric,
@@ -741,7 +778,6 @@ def render_overview(df, metrics, date_col):
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # 各维度汇总
         st.markdown("**各维度汇总**")
         dims = [c for c in (st.session_state.categorical_columns + st.session_state.numeric_columns) if c not in st.session_state.date_columns]
         
@@ -753,7 +789,6 @@ def render_overview(df, metrics, date_col):
             dim_summary.columns = [selected_dim, '总计', '平均', '记录数']
             dim_summary = dim_summary.sort_values('总计', ascending=False)
             
-            # 添加总计行
             total_row = pd.DataFrame([{
                 selected_dim: '总计',
                 '总计': dim_summary['总计'].sum(),
@@ -764,7 +799,6 @@ def render_overview(df, metrics, date_col):
             
             st.dataframe(dim_summary.style.format({'总计': smart_format, '平均': smart_format, '记录数': '{:,}'}), use_container_width=True)
     
-    # 数据预览
     st.markdown("**数据预览**")
     st.dataframe(df.head(50), use_container_width=True)
 
@@ -778,44 +812,48 @@ def render_attribution(df, dims, metrics, date_col, time_range):
     base_start, base_end, target_start, target_end = time_range
     st.markdown(f"**基期**: {base_start} 至 {base_end} | **目标期**: {target_start} 至 {target_end}")
     
-    # 自动对所有维度归因
+    # 修改点：自动归因 - 为每个维度创建独立的Expander，默认展示Top 10，避免渲染超限
     st.markdown("---")
     st.markdown("**自动归因（所有维度）**")
     
     all_dims = [c for c in (st.session_state.categorical_columns + st.session_state.numeric_columns) if c not in st.session_state.date_columns]
     
+    # 添加Top N选择器
+    top_n = st.slider("每个维度展示Top N（按变动绝对值）", 5, 50, 10, key="auto_attr_top_n")
+    
     if st.button("运行自动归因", type="primary"):
         with st.spinner("计算中..."):
             engine = AttributionEngine()
             
-            auto_results = []
-            for dim in all_dims:
-                result_df, total_change, total_base, total_target, total_rate = engine.calculate_contribution(
-                    df, dim, metrics[0], date_col, base_start, base_end, target_start, target_end
-                )
-                if result_df is not None:
-                    # 取前3个贡献最大的维度值
-                    top3 = result_df[result_df['维度'] != '总计'].head(3)
-                    for _, row in top3.iterrows():
-                        auto_results.append({
-                            '维度': dim,
-                            '维度值': row['维度'],
-                            '变动': row['变动'],
-                            '贡献pp': row['贡献pp']
-                        })
+            # 创建两列布局，更紧凑
+            dim_cols = st.columns(2)
             
-            auto_df = pd.DataFrame(auto_results)
-            auto_df = auto_df.sort_values('贡献pp', key=abs, ascending=False)
-            
-            def color_pp(val):
-                if isinstance(val, (int, float)):
-                    if val > 0:
-                        return 'color: #dc2626'
-                    elif val < 0:
-                        return 'color: #16a34a'
-                return ''
-            
-            st.dataframe(auto_df.style.format({'变动': smart_format, '贡献pp': lambda x: f"{x:+.2f}pp"}).map(color_pp, subset=['变动', '贡献pp']), use_container_width=True)
+            for idx, dim in enumerate(all_dims):
+                with dim_cols[idx % 2]:
+                    with st.expander(f"📊 {dim} (点击展开)", expanded=False):
+                        result_df, total_change, total_base, total_target, total_rate = engine.calculate_contribution(
+                            df, dim, metrics[0], date_col, base_start, base_end, target_start, target_end
+                        )
+                        if result_df is not None:
+                            # 分离总计行和明细
+                            total_row = result_df[result_df['维度值'] == '【总计】']
+                            detail_rows = result_df[result_df['维度值'] != '【总计】']
+                            
+                            # 只取Top N（按变动绝对值）
+                            top_details = detail_rows.head(top_n)
+                            
+                            # 合并回总计行 + Top N
+                            display_df = pd.concat([total_row, top_details], ignore_index=True)
+                            
+                            # 显示统计信息
+                            st.caption(f"总计: {smart_format(total_base)} → {smart_format(total_target)} | 共{len(detail_rows)}个维度值，展示Top {min(top_n, len(detail_rows))}")
+                            
+                            # 紧凑表格
+                            st.dataframe(
+                                style_contribution_df(display_df), 
+                                use_container_width=True, 
+                                height=min(400, 50 + 35 * len(display_df))
+                            )
     
     # 单维度详细分析
     st.markdown("---")
@@ -824,7 +862,7 @@ def render_attribution(df, dims, metrics, date_col, time_range):
     selected_dim = st.selectbox("选择维度", dims, key="attr_dim")
     chart_type = st.selectbox("图表类型", ["柱状图", "饼图"], key="attr_chart_type")
     
-    if st.button("开始分析", type="primary"):
+    if st.button("开始分析", type="primary", key="single_attr_btn"):
         with st.spinner("计算中..."):
             engine = AttributionEngine()
             result_df, total_change, total_base, total_target, total_rate = engine.calculate_contribution(
@@ -832,7 +870,6 @@ def render_attribution(df, dims, metrics, date_col, time_range):
             )
             
             if result_df is not None:
-                # 总计数据
                 st.markdown("**总计**")
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -840,58 +877,28 @@ def render_attribution(df, dims, metrics, date_col, time_range):
                 with col2:
                     st.metric("目标期", smart_format(total_target))
                 with col3:
-                    st.metric("变动", smart_format(total_change), f"{total_rate:+.1f}%")
+                    change_str = f"{total_change:.0f}" if abs(total_change) >= 100 else f"{total_change:.2f}"
+                    st.metric("变动", change_str)
                 with col4:
-                    st.metric("维度数", len(result_df) - 1)
+                    st.metric("变动率", f"{total_rate:.2f}%")
                 
-                # 基期/目标期对比图（不含总计）
-                plot_df = result_df[result_df['维度'] != '总计'].copy()
+                plot_df = result_df[result_df['维度值'] != '【总计】'].copy()
                 
                 if chart_type == "柱状图":
                     fig = go.Figure()
-                    fig.add_trace(go.Bar(x=plot_df['维度'], y=plot_df['基期值'], name='基期', marker_color='#94a3b8'))
-                    fig.add_trace(go.Bar(x=plot_df['维度'], y=plot_df['目标期值'], name='目标期', marker_color='#0369a1'))
+                    fig.add_trace(go.Bar(x=plot_df['维度值'], y=plot_df['基期值'], name='基期', marker_color='#94a3b8'))
+                    fig.add_trace(go.Bar(x=plot_df['维度值'], y=plot_df['目标期值'], name='目标期', marker_color='#0369a1'))
                     fig.update_layout(barmode='group', title=f"{selected_dim} 基期/目标期对比", height=400)
-                else:  # 饼图
+                else:
                     from plotly.subplots import make_subplots
                     fig = make_subplots(rows=1, cols=2, specs=[[{'type':'domain'}, {'type':'domain'}]],
                                        subplot_titles=['基期占比', '目标期占比'])
-                    fig.add_trace(go.Pie(labels=plot_df['维度'], values=plot_df['基期值'], name='基期'), 1, 1)
-                    fig.add_trace(go.Pie(labels=plot_df['维度'], values=plot_df['目标期值'], name='目标期'), 1, 2)
+                    fig.add_trace(go.Pie(labels=plot_df['维度值'], values=plot_df['基期值'], name='基期'), 1, 1)
+                    fig.add_trace(go.Pie(labels=plot_df['维度值'], values=plot_df['目标期值'], name='目标期'), 1, 2)
                     fig.update_layout(title=f"{selected_dim} 占比分析", height=400)
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # 瀑布图
-                fig_waterfall = go.Figure()
-                measure = ['absolute']
-                x_vals = ['基期总量']
-                y_vals = [total_base]
-                text_vals = [smart_format(total_base)]
-                
-                plot_df_sorted = plot_df.sort_values('变动', key=abs, ascending=False)
-                for _, row in plot_df_sorted.iterrows():
-                    measure.append('relative')
-                    x_vals.append(str(row['维度']))
-                    y_vals.append(row['变动'])
-                    text_vals.append(smart_format(row['变动']) if abs(row['变动']) >= 1 else '')
-                
-                measure.append('total')
-                x_vals.append('目标期总量')
-                y_vals.append(total_target)
-                text_vals.append(smart_format(total_target))
-                
-                fig_waterfall.add_trace(go.Waterfall(
-                    orientation="v", measure=measure, x=x_vals, y=y_vals, text=text_vals, textposition="outside",
-                    connector={"line": {"color": "#e2e8f0", "width": 1}},
-                    decreasing={"marker": {"color": "#16a34a"}},
-                    increasing={"marker": {"color": "#dc2626"}},
-                    totals={"marker": {"color": "#0369a1"}}
-                ))
-                fig_waterfall.update_layout(title="变动瀑布图", height=450, plot_bgcolor='white', yaxis_tickformat=',')
-                st.plotly_chart(fig_waterfall, use_container_width=True)
-                
-                # 明细表格
                 st.markdown("**明细**")
                 st.dataframe(style_contribution_df(result_df), use_container_width=True)
 
@@ -912,23 +919,36 @@ def render_cross(df, dims, metrics, date_col, time_range):
     if st.button("开始分析", type="primary"):
         with st.spinner("计算中..."):
             engine = AttributionEngine()
-            result_display, result_raw = engine.cross_analysis(
+            result_display, total_change, total_base, total_target, total_change_rate = engine.cross_analysis(
                 df, dims[:2], metrics[0], date_col, base_start, base_end, target_start, target_end
             )
             
             if result_display is not None:
-                st.dataframe(style_contribution_df(result_display), use_container_width=True)
+                # 限制展示行数避免超限（Top 50 + 总计）
+                result_limited = pd.concat([
+                    result_display.head(1),  # 总计行
+                    result_display.iloc[1:].head(49)  # Top 49明细
+                ]) if len(result_display) > 50 else result_display
                 
-                # 热力图
+                st.dataframe(style_contribution_df(result_limited), use_container_width=True)
+                
+                if len(result_display) > 50:
+                    st.caption(f"数据量大，仅展示Top 50，完整数据共{len(result_display)}行")
+                
                 try:
-                    pivot = result_raw.reset_index().pivot_table(index=dims[0], columns=dims[1], values='变动', fill_value=0)
-                    fig = go.Figure(data=go.Heatmap(
-                        z=pivot.values, x=pivot.columns, y=pivot.index,
-                        text=np.round(pivot.values, 0), texttemplate='%{text}',
-                        colorscale=[[0, '#16a34a'], [0.5, '#ffffff'], [1, '#dc2626']], zmid=0
-                    ))
-                    fig.update_layout(title="变动热力图", height=400)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if len(dims) >= 2:
+                        pivot_data = result_display[result_display[dims[0]] != '【总计】']
+                        if len(pivot_data) < 100:  # 只有数据量适中才展示热力图
+                            pivot = pivot_data.pivot_table(
+                                index=dims[0], columns=dims[1], values='变动', fill_value=0, aggfunc='sum'
+                            )
+                            fig = go.Figure(data=go.Heatmap(
+                                z=pivot.values, x=pivot.columns, y=pivot.index,
+                                text=np.round(pivot.values, 0), texttemplate='%{text}',
+                                colorscale=[[0, '#16a34a'], [0.5, '#ffffff'], [1, '#dc2626']], zmid=0
+                            ))
+                            fig.update_layout(title="变动热力图", height=400)
+                            st.plotly_chart(fig, use_container_width=True)
                 except:
                     pass
 
@@ -957,8 +977,8 @@ def render_trend(df, dims, metrics, date_col):
                 
                 styled_growth = growth_df.style.format({
                     '期初值': smart_format, '期末值': smart_format,
-                    '变动': lambda x: f"{x:+,.0f}" if abs(x) >= 100 else f"{x:+.2f}",
-                    '变动率': '{:+.1f}%',
+                    '变动': smart_format,
+                    '变动率': '{:.2f}%',
                     '平均值': smart_format, '最大值': smart_format, '最小值': smart_format
                 }).map(color_growth, subset=['变动', '变动率'])
                 
@@ -993,7 +1013,6 @@ def render_visualization(df, dims, metrics, viz_type):
         fig.update_layout(title="相关性热力图", height=500)
         st.plotly_chart(fig, use_container_width=True)
 
-
 def render_statistics(df, metrics):
     st.markdown('<div class="section-title">统计分析</div>', unsafe_allow_html=True)
     
@@ -1003,7 +1022,6 @@ def render_statistics(df, metrics):
     
     stats_module = StatsModule(df)
     
-    # 总计
     st.markdown("**总计**")
     cols = st.columns(min(4, len(metrics)))
     for idx, metric in enumerate(metrics[:4]):
@@ -1194,7 +1212,7 @@ def main():
         uploaded_file = st.file_uploader("上传文件", type=['csv', 'xlsx', 'xls'])
         
         if uploaded_file and not st.session_state.data_loaded:
-            with st.spinner("加载中..."):
+            with st.spinner("加载中喵..."):
                 file_bytes = uploaded_file.getvalue()
                 df = load_data(file_bytes, uploaded_file.name)
                 if df is not None:
@@ -1207,14 +1225,13 @@ def main():
                     st.session_state.categorical_columns = cat_cols
                     st.session_state.data_loaded = True
                     st.rerun()
+                else:
+                    st.error("文件加载失败喵")
         
         if st.session_state.data_loaded:
             st.success(f"已加载: {st.session_state.file_name}")
             st.divider()
-            st.markdown("### 功能选择")
-            modules = ["数据概览", "异动归因", "交叉分析", "趋势分析", "可视化", "统计分析", "机器学习", "预测分析", "数据清洗"]
-            module = st.selectbox("选择功能", modules, label_visibility="collapsed")
-            st.session_state.current_module = module
+            module = render_module_buttons()
     
     render_welcome()
     
@@ -1228,7 +1245,7 @@ def main():
             st.markdown("---")
             render_results(module, dims, metrics, date_col, time_range, extra)
     else:
-        st.info("请在侧边栏上传数据文件")
+        st.info("请在侧边栏上传数据文件喵~")
 
 if __name__ == "__main__":
     main()
