@@ -830,7 +830,7 @@ def render_attribution(df, dims, metrics, date_col, time_range):
             
             for idx, dim in enumerate(all_dims):
                 with dim_cols[idx % 2]:
-                    with st.expander(f"📊 {dim} (点击展开)", expanded=False):
+                    with st.expander(f"🐧 {dim} (点击展开)", expanded=False):
                         result_df, total_change, total_base, total_target, total_rate = engine.calculate_contribution(
                             df, dim, metrics[0], date_col, base_start, base_end, target_start, target_end
                         )
@@ -1226,7 +1226,7 @@ def main():
                     st.session_state.data_loaded = True
                     st.rerun()
                 else:
-                    st.error("文件加载失败喵")
+                    st.error("文件加载失败喵TvT")
         
         if st.session_state.data_loaded:
             st.success(f"已加载: {st.session_state.file_name}")
@@ -1245,7 +1245,7 @@ def main():
             st.markdown("---")
             render_results(module, dims, metrics, date_col, time_range, extra)
     else:
-        st.info("请在侧边栏上传数据文件喵~")
+        st.info("请在侧边栏上传数据文件喵~Ciallo～(∠・ω< )⌒☆")
 
 if __name__ == "__main__":
     main()
