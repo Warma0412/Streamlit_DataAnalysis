@@ -1127,15 +1127,15 @@ def create_sunburst_figure(df, dims, metric):
         return None
 
 def render_welcome():
-    st.markdown("### 智能数据分析平台")
-    st.caption("Advanced Analytics Platform | 上传数据开始智能分析之旅")
+    st.markdown("### 数据分析平台")
+    st.caption("Ciallo～(∠・ω< )⌒☆")
 
 def render_upload():
     st.markdown('<div class="section-title">数据上传</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("选择CSV或Excel文件", type=['csv', 'xlsx', 'xls'])
     
     if uploaded_file and not st.session_state.data_loaded:
-        with st.spinner("正在智能解析数据..."):
+        with st.spinner("正在解析数据ing"):
             file_bytes = uploaded_file.getvalue()
             df = load_data(file_bytes, uploaded_file.name)
             if df is not None:
@@ -1178,7 +1178,7 @@ def render_module_buttons():
         return None
     
     st.markdown('<div class="section-title">功能选择</div>', unsafe_allow_html=True)
-    modules = ["数据概览", "异动归因", "交叉分析", "趋势分析", "可视化", "统计分析", "机器学习", "预测分析", "数据清洗"]
+    modules = ["数据概览", "异动归因", "交叉分析", "线性趋势", "可视化", "统计分析", "机器学习", "预测分析", "数据清洗"]
     
     cols = st.columns(3)
     for idx, module in enumerate(modules):
