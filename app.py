@@ -96,14 +96,10 @@ def smart_format(val):
         return "-"
     try:
         num = float(val)
-        if abs(num) >= 1000:
+        if abs(num) >= 100:
             return f"{num:,.0f}"
-        elif abs(num) >= 100:
-            return f"{num:,.1f}"
-        elif abs(num) >= 1:
-            return f"{num:,.2f}"
         else:
-            return f"{num:,.4f}"
+            return f"{num:.2f}"
     except:
         return str(val)
 
@@ -165,12 +161,36 @@ def render_time_range_selector(df, date_col):
     default_base_date = dates[-2] if len(dates) >= 2 else dates[-1]
     
     quick_options = st.radio("快捷选择", 
-                            ["自定义", "单日对比（昨 vs 今）", "最近7天 vs 前7天", "最近30天 vs 前30天"], 
+                            ["自定义", "单日对比（昨 vs 今）", "最新一日 vs 上周该日（WoW）", "最新一日 vs 去年该日（YoY）", "最近7天 vs 前7天", "最近30天 vs 前30天"], 
                             horizontal=True)
     
     if quick_options == "单日对比（昨 vs 今）":
         return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
                 default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+    
+    elif quick_options == "最新一日 vs 上周该日（WoW）":
+        # 计算上一周同周几的日期
+        wow_base_date = default_target_date - timedelta(days=7)
+        # 检查该日期是否在数据中
+        if wow_base_date in dates:
+            return (wow_base_date.strftime('%Y-%m-%d'), wow_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+        else:
+            st.warning("上一周同周几的数据不存在，使用单日对比")
+            return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+    
+    elif quick_options == "最新一日 vs 去年该日（YoY）":
+        # 计算上一年同周几的日期
+        yoy_base_date = default_target_date - timedelta(days=365)
+        # 检查该日期是否在数据中
+        if yoy_base_date in dates:
+            return (yoy_base_date.strftime('%Y-%m-%d'), yoy_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
+        else:
+            st.warning("上一年同周几的数据不存在，使用单日对比")
+            return (default_base_date.strftime('%Y-%m-%d'), default_base_date.strftime('%Y-%m-%d'),
+                    default_target_date.strftime('%Y-%m-%d'), default_target_date.strftime('%Y-%m-%d'))
     
     elif quick_options == "最近7天 vs 前7天":
         if len(dates) >= 14:
@@ -234,7 +254,7 @@ def render_time_range_selector(df, date_col):
 
 class AttributionEngine:
     @staticmethod
-    def calculate_contribution(df, dimension, metric, date_col, base_start, base_end, target_start, target_end):
+    def calculate_contribution(df, dimension, metric, date_col, base_start, base_end, target_start, target_end, calc_method="汇总"):
         try:
             base_start_dt = pd.to_datetime(base_start)
             base_end_dt = pd.to_datetime(base_end)
@@ -245,8 +265,17 @@ class AttributionEngine:
             base_df = df[(df[date_col] >= base_start_dt) & (df[date_col] <= base_end_dt)]
             target_df = df[(df[date_col] >= target_start_dt) & (df[date_col] <= target_end_dt)]
             
-            base_data = base_df.groupby(dimension)[metric].sum()
-            target_data = target_df.groupby(dimension)[metric].sum()
+            # 计算天数
+            base_days = (base_end_dt - base_start_dt).days + 1
+            target_days = (target_end_dt - target_start_dt).days + 1
+            
+            # 根据计算方式选择聚合函数
+            if calc_method == "汇总":
+                base_data = base_df.groupby(dimension)[metric].sum()
+                target_data = target_df.groupby(dimension)[metric].sum()
+            else:  # 平均天数
+                base_data = base_df.groupby(dimension)[metric].sum() / base_days
+                target_data = target_df.groupby(dimension)[metric].sum() / target_days
             
             all_dims = sorted(list(set(base_data.index) | set(target_data.index)))
             
@@ -304,7 +333,7 @@ class AttributionEngine:
             return None, 0, 0, 0, 0
 
     @staticmethod
-    def multi_dim_analysis(df, dims, metric, date_col, base_start, base_end, target_start, target_end):
+    def multi_dim_analysis(df, dims, metric, date_col, base_start, base_end, target_start, target_end, calc_method="汇总"):
         try:
             base_start_dt = pd.to_datetime(base_start)
             base_end_dt = pd.to_datetime(base_end)
@@ -315,8 +344,19 @@ class AttributionEngine:
             base_df = df[(df[date_col] >= base_start_dt) & (df[date_col] <= base_end_dt)]
             target_df = df[(df[date_col] >= target_start_dt) & (df[date_col] <= target_end_dt)]
             
-            base_data = base_df.groupby(dims)[metric].sum().reset_index()
-            target_data = target_df.groupby(dims)[metric].sum().reset_index()
+            # 计算天数
+            base_days = (base_end_dt - base_start_dt).days + 1
+            target_days = (target_end_dt - target_start_dt).days + 1
+            
+            # 根据计算方式选择聚合函数
+            if calc_method == "汇总":
+                base_data = base_df.groupby(dims)[metric].sum().reset_index()
+                target_data = target_df.groupby(dims)[metric].sum().reset_index()
+            else:  # 平均天数
+                base_data = base_df.groupby(dims)[metric].sum().reset_index()
+                target_data = target_df.groupby(dims)[metric].sum().reset_index()
+                base_data[metric] = base_data[metric] / base_days
+                target_data[metric] = target_data[metric] / target_days
             
             merged = pd.merge(base_data, target_data, on=dims, how='outer', suffixes=('_基期', '_目标期')).fillna(0)
             merged['变动'] = merged[f'{metric}_目标期'] - merged[f'{metric}_基期']
@@ -337,18 +377,11 @@ class AttributionEngine:
                 f'{metric}_目标期': '目标期值'
             })
             
-            if len(dims) > 2:
-                merged['组合维度'] = merged[dims].astype(str).agg(' | '.join, axis=1)
-            
             result_cols = dims + ['基期值', '目标期值', '变动', '变动率', '贡献百分比', '贡献pp']
-            if len(dims) > 2:
-                result_cols.append('组合维度')
             
             merged = merged[result_cols].sort_values('变动', key=abs, ascending=False)
             
             total_row_data = {dim: '【总计】' for dim in dims}
-            if len(dims) > 2:
-                total_row_data['组合维度'] = '【总计】'
             total_row_data.update({
                 '基期值': total_base,
                 '目标期值': total_target,
@@ -771,11 +804,12 @@ class AdvancedForecastModule:
                 st.warning("时间序列数据少于30天，可能影响预测精度")
             
             # 确保训练数据足够
-            if len(ts_data) <= periods:
-                st.error(f"数据量({len(ts_data)})不足，需要至少{periods+1}条数据才能进行预测")
+            if len(ts_data) < 1:
+                st.error(f"数据量({len(ts_data)})不足，无法进行预测")
                 return None, None
                 
-            train = ts_data.iloc[:-periods]
+            # 使用全部数据作为训练数据
+            train = ts_data
             
             if len(train) == 0:
                 st.error("训练数据为空")
@@ -839,7 +873,8 @@ class AdvancedForecastModule:
                                    mode='lines', fill='tonexty', fillcolor='rgba(244, 114, 182, 0.2)',
                                    line=dict(width=0), showlegend=False))
             
-            fig.update_layout(title=f"{metric} - Prophet预测", height=500, plot_bgcolor='white')
+            fig.update_layout(title=f"{metric} - Prophet预测", height=500, plot_bgcolor='white', 
+                             xaxis_rangeslider_visible=True, xaxis_range=[train.index.min(), forecast['ds'].max()])
             
             # 安全计算MAPE
             actual = df_prophet['y'].values
@@ -1036,7 +1071,8 @@ class AdvancedForecastModule:
             fig.add_trace(go.Scatter(x=future_dates, y=predictions, mode='lines+markers', 
                                    name='预测值', line=dict(color='#7c3aed')))
             
-            fig.update_layout(title=f"{metric} - {model_type.upper()}时序预测", height=500)
+            fig.update_layout(title=f"{metric} - {model_type.upper()}时序预测", height=500, 
+                             xaxis_rangeslider_visible=True, xaxis_range=[train.index.min(), future_dates.max()])
             
             importance = pd.DataFrame({
                 '特征': X.columns,
@@ -1109,7 +1145,8 @@ def create_treemap_figure(df, dims, metric, title):
     
     try:
         fig = px.treemap(plot_df, path=path, values=values, 
-                        title=title, color=metric, color_continuous_scale='RdBu')
+                        title=title, color=metric, 
+                        color_continuous_scale=[(0, "#86efac"), (0.5, "#ffffff"), (1, "#fca5a5")])
         fig.update_layout(height=600)
         return fig
     except:
@@ -1120,7 +1157,7 @@ def create_sunburst_figure(df, dims, metric):
     
     try:
         fig = px.sunburst(plot_df, path=dims, values=metric, color=metric,
-                         color_continuous_scale='RdBu')
+                         color_continuous_scale=[(0, "#86efac"), (0.5, "#ffffff"), (1, "#fca5a5")])
         fig.update_layout(height=600)
         return fig
     except:
@@ -1525,7 +1562,10 @@ def render_attribution(df, dims, metrics, date_col, time_range):
         return
     
     base_start, base_end, target_start, target_end = time_range
-    st.markdown(f"<div class='info-box'>分析时段 | 基期: {base_start} ~ {base_end} | 目标期: {target_start} ~ {target_end}`</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='info-box'>分析时段 | 基期: {base_start} ~ {base_end} | 目标期: {target_start} ~ {target_end}</div>", unsafe_allow_html=True)
+    
+    # 添加数据计算方式选择
+    calc_method = st.radio("数据计算方式", ["汇总", "平均天数"], horizontal=True, key="attribution_calc_method")
     
     st.markdown("**全维度自动归因**")
     
@@ -1544,7 +1584,7 @@ def render_attribution(df, dims, metrics, date_col, time_range):
             with results_tabs[idx]:
                 with st.spinner(f"分析 {dim}..."):
                     result_df, total_change, total_base, total_target, total_rate = engine.calculate_contribution(
-                        df, dim, metrics[0], date_col, base_start, base_end, target_start, target_end
+                        df, dim, metrics[0], date_col, base_start, base_end, target_start, target_end, calc_method
                     )
                     if result_df is not None:
                         total_row = result_df[result_df['维度值'] == '【总计】']
@@ -1589,13 +1629,16 @@ def render_cross(df, dims, metrics, date_col, time_range):
     base_start, base_end, target_start, target_end = time_range
     st.markdown(f"<div class='info-box'>分析时段 | 基期: {base_start} ~ {base_end} | 目标期: {target_start} ~ {target_end}</div>", unsafe_allow_html=True)
     
+    # 添加数据计算方式选择
+    calc_method = st.radio("数据计算方式", ["汇总", "平均天数"], horizontal=True, key="cross_calc_method")
+    
     st.markdown(f"**已选维度 ({len(dims)}个):** " + " | ".join([f"**{d}**" for d in dims]))
     
     if st.button("开始交叉分析", type="primary", use_container_width=True):
         with st.spinner("正在进行多维度交叉计算..."):
             engine = AttributionEngine()
             result_display, total_change, total_base, total_target = engine.multi_dim_analysis(
-                df, dims, metrics[0], date_col, base_start, base_end, target_start, target_end
+                df, dims, metrics[0], date_col, base_start, base_end, target_start, target_end, calc_method
             )
             
             if result_display is not None:
@@ -1609,13 +1652,59 @@ def render_cross(df, dims, metrics, date_col, time_range):
                             index=dims[0], columns=dims[1], values='变动', fill_value=0
                         )
                         # 红绿配色：负值绿色，正值红色，0为白色
-                        fig = px.imshow(
-                            pivot_table, 
-                            text_auto=True, 
-                            aspect="auto", 
-                            color_continuous_scale=[(0, "#86efac"), (0.5, "#ffffff"), (1, "#fca5a5")],
-                            color_continuous_midpoint=0
-                        )
+                        # 自定义文本格式函数，确保不使用k和m单位
+                        def format_heatmap_text(val):
+                            if pd.isna(val) or val is None:
+                                return "-"
+                            try:
+                                num = float(val)
+                                if abs(num) >= 100:
+                                    return f"{num:,.0f}"
+                                else:
+                                    return f"{num:.2f}"
+                            except:
+                                return str(val)
+                        
+                        # 计算色块数量和密度
+                        num_rows = len(pivot_table.index)
+                        num_cols = len(pivot_table.columns)
+                        total_cells = num_rows * num_cols
+                        density = max(num_rows, num_cols)
+                        
+                        # 根据密度决定是否显示文本和字体大小
+                        show_text = True
+                        font_size = 12
+                        
+                        if density > 20:  # 超过20列或行时不显示文本
+                            show_text = False
+                        elif density > 15:  # 15-20列或行时使用小字体
+                            font_size = 8
+                        elif density > 10:  # 10-15列或行时使用中等字体
+                            font_size = 10
+                        else:  # 少于10列或行时使用大字体
+                            font_size = 14
+                        
+                        # 准备文本标签
+                        text_labels = []
+                        for i in range(num_rows):
+                            row = []
+                            for j in range(num_cols):
+                                val = pivot_table.iloc[i, j]
+                                row.append(format_heatmap_text(val))
+                            text_labels.append(row)
+                        
+                        # 使用go.Heatmap代替px.imshow，确保文本显示
+                        fig = go.Figure(data=go.Heatmap(
+                            z=pivot_table.values,
+                            x=pivot_table.columns,
+                            y=pivot_table.index,
+                            colorscale=[(0, "#86efac"), (0.5, "#ffffff"), (1, "#fca5a5")],
+                            colorbar=dict(title="变动"),
+                            text=text_labels if show_text else None,
+                            hoverinfo="text" if show_text else "z",
+                            texttemplate="%{text}" if show_text else None,
+                            textfont=dict(size=font_size, color="#333333") if show_text else None
+                        ))
                         fig.update_layout(height=500, title="变动幅度热力图")
                         st.plotly_chart(fig, use_container_width=True)
                     with tab2:
@@ -1623,17 +1712,15 @@ def render_cross(df, dims, metrics, date_col, time_range):
                         st.dataframe(style_contribution_df(result_display, is_cross=True, dims=dims), use_container_width=True, height=500)
                 else:
                     st.markdown("**多维度可视化展示**")
-                    viz_col1, viz_col2 = st.columns(2)
                     
-                    with viz_col1:
-                        fig_tree = create_treemap_figure(result_display, dims, '目标期值', f"{' | '.join(dims)} 层级结构")
-                        if fig_tree:
-                            st.plotly_chart(fig_tree, use_container_width=True)
+                    # 上下放置两个层级结构图，避免拥挤
+                    fig_tree = create_treemap_figure(result_display, dims, '目标期值', f"{' | '.join(dims)} 层级结构")
+                    if fig_tree:
+                        st.plotly_chart(fig_tree, use_container_width=True)
                     
-                    with viz_col2:
-                        fig_sun = create_sunburst_figure(result_display, dims, '目标期值')
-                        if fig_sun:
-                            st.plotly_chart(fig_sun, use_container_width=True)
+                    fig_sun = create_sunburst_figure(result_display, dims, '目标期值')
+                    if fig_sun:
+                        st.plotly_chart(fig_sun, use_container_width=True)
                     
                     st.markdown("**层级明细数据**")
                     st.dataframe(style_contribution_df(result_display, is_cross=True, dims=dims), use_container_width=True, height=500)
@@ -1963,11 +2050,20 @@ def render_cleaning(df):
             st.rerun()
     
     with col4:
+        if st.button("删除全缺失列", use_container_width=True):
+            before = len(df.columns)
+            df = df.dropna(axis=1, how='all')
+            st.session_state.df = df
+            st.success(f"已删除 {before - len(df.columns)} 列全缺失数据")
+            st.rerun()
+    
+    st.markdown("**高级操作**")
+    col1, col2 = st.columns(2)
+    with col1:
         if st.button("重置所有数据", use_container_width=True):
             st.session_state.df = st.session_state.df_original.copy()
             st.success("数据已重置为原始状态")
             st.rerun()
-
 def main():
     init_session_state()
     
